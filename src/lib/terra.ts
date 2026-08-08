@@ -11,6 +11,7 @@ import {
 } from "terra-react";
 
 import { createTerraSession, type Provider } from "./api";
+import { READ_PERMISSIONS, describeGrant, type PermissionName } from "./permissions";
 
 /**
  * The Apple Health connection, through Terra.
@@ -29,62 +30,38 @@ import { createTerraSession, type Provider } from "./api";
  */
 
 /**
- * Exactly what we read, and nothing more.
+ * The one place a permission name becomes an SDK enum value.
  *
- * This list is the app's honest answer to "what do you take from my Health
- * app?", and it has to keep matching three other things: the sentence in
- * NSHealthShareUsageDescription, the per-provider disclosure on the Connections
- * screen, and the App Store privacy nutrition label. Adding a permission here
- * without updating those three is how an app ends up rejected — or worse,
- * quietly taking more than it admitted to.
- *
- * Deliberately absent: weight, BMI, body fat, blood glucose, blood pressure,
- * nutrition, menstruation, location. The summaries do not use them.
+ * The vocabulary itself lives in ./permissions, which imports nothing, so it
+ * can be tested. This translation is the only part that needs the native
+ * package — and permissions.test.ts asserts that every name resolves, so a
+ * rename in terra-react fails a test instead of silently requesting a shorter
+ * list of permissions than the disclosure promises.
  */
-export const READ_PERMISSIONS: CustomPermissions[] = [
-  CustomPermissions.SLEEP_ANALYSIS,
-  CustomPermissions.RESTING_HEART_RATE,
-  CustomPermissions.HEART_RATE,
-  CustomPermissions.HEART_RATE_VARIABILITY,
-  CustomPermissions.STEPS,
-  CustomPermissions.ACTIVE_DURATIONS,
-  CustomPermissions.WORKOUT_TYPES,
-  CustomPermissions.ACTIVITY_SUMMARY,
-];
-
-/** Plain-language name per permission, for the "what we read" disclosure. */
-export const PERMISSION_LABELS: Record<string, string> = {
-  SLEEP_ANALYSIS: "Sleep",
-  RESTING_HEART_RATE: "Resting heart rate",
-  HEART_RATE: "Heart rate",
-  HEART_RATE_VARIABILITY: "Heart rate variability",
-  STEPS: "Steps",
-  ACTIVE_DURATIONS: "Active minutes",
-  WORKOUT_TYPES: "Workouts",
-  ACTIVITY_SUMMARY: "Activity summary",
-};
-
-export type ConnectOutcome =
-  | { kind: "connected"; granted: string[]; missing: string[] }
-  | { kind: "denied" }
-  | { kind: "failed"; message: string };
+export function toSdkPermission(name: PermissionName): CustomPermissions {
+  const value = CustomPermissions[name];
+  if (typeof value !== "number") {
+    throw new Error(`terra-react has no CustomPermissions.${name}`);
+  }
+  return value;
+}
 
 /**
- * A HealthKit refusal is indistinguishable from "no data yet".
+ * Built on demand, not at module scope.
  *
- * iOS deliberately does not tell an app which read permissions were denied —
- * that would leak the fact that someone tracks a condition. So an empty
- * granted list means "denied, or granted with nothing recorded", and the UI
- * must not state the stronger of those two as fact.
+ * Throwing here while the module is being imported would take the whole screen
+ * down at launch with a blank white view. Called from inside the connect flow,
+ * the same failure arrives as a message the member can actually read — and the
+ * test makes it something that should never reach a member in the first place.
  */
-export function describeGrant(granted: string[]): {
-  full: boolean;
-  missing: string[];
-} {
-  const asked = READ_PERMISSIONS.map((p) => CustomPermissions[p]);
-  const missing = asked.filter((name) => !granted.includes(name));
-  return { full: missing.length === 0, missing };
+function requestedPermissions(): CustomPermissions[] {
+  return READ_PERMISSIONS.map(toSdkPermission);
 }
+
+export type ConnectOutcome =
+  | { kind: "connected"; granted: string[]; missing: PermissionName[] }
+  | { kind: "denied" }
+  | { kind: "failed"; message: string };
 
 let initialised = false;
 
@@ -122,12 +99,7 @@ export async function connectAppleHealth(): Promise<ConnectOutcome> {
   try {
     await prepare(session.devId, session.referenceId);
 
-    const res = await initConnection(
-      Connections.APPLE_HEALTH,
-      session.token,
-      true,
-      READ_PERMISSIONS,
-    );
+    const res = await initConnection(Connections.APPLE_HEALTH, session.token, true, requestedPermissions());
     if (!res.success) {
       return { kind: "failed", message: res.error ?? "Apple Health did not connect." };
     }
@@ -135,11 +107,13 @@ export async function connectAppleHealth(): Promise<ConnectOutcome> {
     // What iOS actually handed over, which may be a strict subset of what was
     // asked for. The member is allowed to share sleep and withhold heart rate.
     const granted = await grantedPermissions();
-    const { missing } = describeGrant(granted);
+    const { missing, silent } = describeGrant(granted);
 
-    if (granted.length === 0) {
-      return { kind: "denied" };
-    }
+    // Nothing reported. Could be a refusal, could be that the SDK was not
+    // ready — terra-react resolves an empty array in both cases — so this is
+    // reported as "nothing is being shared", never as "you said no".
+    if (silent) return { kind: "denied" };
+
     return { kind: "connected", granted, missing };
   } catch (err) {
     return { kind: "failed", message: err instanceof Error ? err.message : "Could not connect." };
@@ -154,7 +128,7 @@ export async function connectAppleHealth(): Promise<ConnectOutcome> {
  * and the UI needs to say that rather than leaving them tapping.
  */
 export async function requestMissingPermissions(): Promise<string[]> {
-  const res = await requestHealthKitPermissions(READ_PERMISSIONS);
+  const res = await requestHealthKitPermissions(requestedPermissions());
   if (!res.success) throw new Error(res.error ?? "Could not update permissions.");
   return grantedPermissions();
 }

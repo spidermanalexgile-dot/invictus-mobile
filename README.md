@@ -90,8 +90,17 @@ than a retry of the same token.
 
 Sleep, resting heart rate, heart rate, heart rate variability, steps, active
 minutes, workouts, activity summary. That list lives in one place —
-`READ_PERMISSIONS` in `src/lib/terra.ts` — and the on-screen disclosure is
+`READ_PERMISSIONS` in `src/lib/permissions.ts` — and the on-screen disclosure is
 generated from it so the two cannot drift apart.
+
+`permissions.ts` deliberately **imports nothing**. `terra-react`'s entry point
+pulls in React Native's `NativeModules`, which cannot load outside a device
+build, so anything living beside it was untestable. Keeping the vocabulary and
+the grant comparison there means the tests exercise the shipped code rather than
+a copy of it. `terra.ts` translates names into SDK enum values at the single
+boundary where that has to happen, and a test asserts every name still resolves
+— so a rename in `terra-react` fails CI instead of silently requesting fewer
+permissions than the disclosure promises.
 
 We do **not** request clinical health records. Terra's setup guide lists
 `NSHealthClinicalHealthRecordsShareUsageDescription` next to the other keys; it
@@ -117,8 +126,13 @@ removing the connection removes the data in the same statement. There is also
   guarded on the source's own revision stamp.
 - **A nap is not last night's sleep.** Counting it drags duration and onset down
   while looking entirely plausible.
-- **iOS never says which reads were denied.** An empty grant means "denied, or
-  granted with nothing recorded", and the UI must not assert the stronger one.
+- **iOS never says which reads were denied.** And `grantedPermissions()` also
+  resolves an empty array when the SDK has not initialised. Three causes, one
+  signal — so `describeGrant` reports `silent`, and the UI says "nothing is
+  being shared" rather than "you said no".
+- **Permission names come from Terra's native SDKs, not from us.** They are
+  compared case- and separator-insensitively, so a `sleepAnalysis` from one
+  platform and a `SLEEP_ANALYSIS` from another do not read as withheld.
 
 ## Tests
 

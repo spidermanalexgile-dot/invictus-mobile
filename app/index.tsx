@@ -7,15 +7,8 @@ import { Empty, ErrorState, Loading, StaleNotice } from "@/components/States";
 import { daysSince } from "@/lib/staleness";
 import { ApiError, disconnectProvider, fetchConnections, type Connection } from "@/lib/api";
 import { useSession } from "@/lib/session";
-import {
-  PERMISSION_LABELS,
-  READ_PERMISSIONS,
-  backfill,
-  connectAppleHealth,
-  describeGrant,
-  requestMissingPermissions,
-} from "@/lib/terra";
-import { CustomPermissions } from "terra-react";
+import { READ_PERMISSIONS, describeGrant, labelFor } from "@/lib/permissions";
+import { backfill, connectAppleHealth, requestMissingPermissions } from "@/lib/terra";
 import { color, radius, space, type } from "@/theme/tokens";
 
 /**
@@ -91,7 +84,7 @@ export default function Home() {
     if (result.requested.length === 0) {
       setNotice("Connected, but the last 90 days could not be requested. Pull down to retry.");
     } else if (outcome.missing.length > 0) {
-      const names = outcome.missing.map((m) => PERMISSION_LABELS[m] ?? m).join(", ");
+      const names = outcome.missing.map(labelFor).join(", ");
       setNotice(`Connected. Importing 90 days. Not shared: ${names}.`);
     } else {
       setNotice("Connected. Importing the last 90 days — this can take a few minutes.");
@@ -108,7 +101,7 @@ export default function Home() {
           ? "All set — everything is shared now."
           : missing.length === READ_PERMISSIONS.length
             ? "Nothing changed. iOS only re-asks once, so change it in Settings › Health › Data Access & Devices › Invictus."
-            : `Still not shared: ${missing.map((m) => PERMISSION_LABELS[m] ?? m).join(", ")}.`,
+            : `Still not shared: ${missing.map(labelFor).join(", ")}.`,
       );
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not update permissions.");
@@ -285,14 +278,11 @@ function Disclosure() {
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>What we read</Text>
-      {READ_PERMISSIONS.map((permission) => {
-        const key = CustomPermissions[permission];
-        return (
-          <Text key={key} style={styles.muted}>
-            • {PERMISSION_LABELS[key] ?? key}
-          </Text>
-        );
-      })}
+      {READ_PERMISSIONS.map((permission) => (
+        <Text key={permission} style={styles.muted}>
+          • {labelFor(permission)}
+        </Text>
+      ))}
       <Text style={[styles.muted, styles.footnote]}>
         Nothing is written back to your Health app. This data is never used for advertising and is
         never sold. Disconnecting deletes it.
